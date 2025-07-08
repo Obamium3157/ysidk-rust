@@ -24,4 +24,8 @@ impl Session {
     pub fn auth_header(&self) -> &HeaderValue {
         &self.auth_header
     }
+
+    pub fn get_pair(&self) -> (&blocking::Client, &HeaderValue) {
+        (&self.client, &self.auth_header)
+    }
 }

@@ -1,15 +1,16 @@
 use std::{fs::File, io::Read};
 
+use anyhow::Context;
 use reqwest::{blocking::Body, header::AUTHORIZATION};
 use serde::Deserialize;
 use serde_json::Value;
+use url::Url;
 
 use crate::session::Session;
 
 pub type Res<T> = anyhow::Result<T>;
 
-const GET_PATH: &'static str = "https://cloud-api.yandex.net/v1/disk/";
-const PUT_PATH: &'static str = "https://cloud-api.yandex.net/v1/disk/resources";
+const DISK_BASE_URL: &'static str = "https://cloud-api.yandex.net/v1/disk/";
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
@@ -21,7 +22,7 @@ struct UploadLink {
 pub fn get_disk_content(session: &Session) -> Res<String> {
     let contents = session
         .client()
-        .get(GET_PATH)
+        .get(DISK_BASE_URL)
         .header(AUTHORIZATION, session.auth_header())
         .send()?
         .error_for_status()?
@@ -34,7 +35,7 @@ pub fn create_folder_on_disk(session: &Session, folder: &str) -> Res<()> {
     let path = disk_path_from_path(folder);
     let response = session
         .client()
-        .put(PUT_PATH)
+        .put(&join_disk_url("resources")?)
         .header(AUTHORIZATION, session.auth_header())
         .query(&[("path", path)])
         .send()?;
@@ -51,7 +52,7 @@ pub fn create_folder_on_disk(session: &Session, folder: &str) -> Res<()> {
 }
 
 pub fn upload_file_to_disk(session: &Session, path: &str, destination: &str) -> Res<()> {
-    let (client, auth_header) = (session.client(), session.auth_header());
+    let (client, auth_header) = session.get_pair();
 
     let parts = destination.split("/");
     let mut final_path = String::new();
@@ -68,7 +69,7 @@ pub fn upload_file_to_disk(session: &Session, path: &str, destination: &str) -> 
     }
 
     let upload_url: UploadLink = client
-        .get(PUT_PATH.to_owned() + "/upload")
+        .get(&join_disk_url("resources/upload")?)
         .header(AUTHORIZATION, auth_header)
         .query(&[
             ("path", disk_path_from_path(&final_path)),
@@ -94,6 +95,47 @@ pub fn upload_file_to_disk(session: &Session, path: &str, destination: &str) -> 
     Ok(())
 }
 
+pub fn read_from_disk(session: &Session, path: &str) -> Res<Option<String>> {
+    if !path.ends_with(".txt") {
+        return Ok(None);
+    }
+
+    let (client, auth_header) = session.get_pair();
+
+    // let download_url = format!("{}resources/download", DISK_BASE_URL);
+    let download_url = join_disk_url("resources/download")?;
+    let response = client
+        .get(&download_url)
+        .header(AUTHORIZATION, auth_header.clone())
+        .query(&[("path", format!("app:/{}", path))])
+        .send();
+
+    let response = match response {
+        Ok(resp) => resp.error_for_status().ok(),
+        Err(_) => None,
+    };
+
+    let response = match response {
+        Some(resp) => resp,
+        None => return Ok(None),
+    };
+
+    let binding = response.json::<Value>()?;
+
+    let href = binding
+        .get("href")
+        .and_then(|v| v.as_str())
+        .context("Поле `href` отсутствует в ответе")?;
+
+    let text = client
+        .get(href)
+        .send()?
+        .error_for_status()?
+        .text()?;
+
+    Ok(Some(text))
+}
+
 fn is_folder(path: &str) -> bool {
     path.split(".").collect::<Vec<&str>>().len() < 2
 }
@@ -103,9 +145,14 @@ fn file_path_from_path(path: &str) -> String {
 }
 
 fn disk_path_from_path(path: &str) -> String {
-    format!("disk:/{}", path)
+    format!("app:/{}", path)
 }
 
 pub fn json_from_text(text: &str) -> Result<Value, serde_json::Error> {
     serde_json::from_str(text)
+}
+
+fn join_disk_url(relative: &str) -> Res<String> {
+    let base = Url::parse(DISK_BASE_URL)?;
+    Ok(base.join(relative)?.to_string())
 }
