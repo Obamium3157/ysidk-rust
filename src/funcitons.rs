@@ -95,6 +95,27 @@ pub fn upload_file_to_disk(session: &Session, path: &str, destination: &str) -> 
     Ok(())
 }
 
+pub fn move_file_on_disk(session: &Session, from: &str, to: &str) -> Res<()> {
+    let (client, auth_header) = session.get_pair();
+
+    let url = join_disk_url("resources/move")?;
+
+    let response = client
+        .post(&url)
+        .header(AUTHORIZATION, auth_header)
+        .query(&[
+            ("from", disk_path_from_path(from)),
+            ("path", disk_path_from_path(to)),
+            ("overwrite", "true".to_owned()),
+        ])
+        .send()?
+        .error_for_status()?;
+
+    println!("Файл перемещен из {from} в {to}");
+
+    Ok(())
+}
+
 pub fn read_from_disk(session: &Session, path: &str) -> Res<Option<String>> {
     if !path.ends_with(".txt") {
         return Ok(None);
@@ -102,7 +123,6 @@ pub fn read_from_disk(session: &Session, path: &str) -> Res<Option<String>> {
 
     let (client, auth_header) = session.get_pair();
 
-    // let download_url = format!("{}resources/download", DISK_BASE_URL);
     let download_url = join_disk_url("resources/download")?;
     let response = client
         .get(&download_url)
